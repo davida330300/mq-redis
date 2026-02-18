@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"mq-redis/internal/state"
+	"mq-redis/internal/store"
 )
 
 type Handler struct {
@@ -57,7 +58,7 @@ func (h *Handler) PostJobs(c *gin.Context) {
 	ctx := c.Request.Context()
 	jobID, found, err := h.store.GetJobIDByIdempotencyKey(ctx, req.IdempotencyKey)
 	if err != nil {
-		if errors.Is(err, ErrStoreUnavailable) {
+		if errors.Is(err, store.ErrStoreUnavailable) {
 			h.failOpen(c, req)
 			return
 		}
@@ -75,6 +76,15 @@ func (h *Handler) PostJobs(c *gin.Context) {
 		return
 	}
 	if err := h.store.CreateJob(ctx, req.IdempotencyKey, jobID, req.Payload); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			jobID, found, err := h.store.GetJobIDByIdempotencyKey(ctx, req.IdempotencyKey)
+			if err == nil && found {
+				c.JSON(http.StatusCreated, JobResponse{JobID: jobID, Status: string(state.Queued)})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
 		return
 	}

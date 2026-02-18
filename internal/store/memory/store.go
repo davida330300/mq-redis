@@ -3,11 +3,10 @@ package memory
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"sync"
-)
 
-var ErrAlreadyExists = errors.New("idempotency key already exists")
+	"mq-redis/internal/store"
+)
 
 // Store is an in-memory implementation of the API Store interface.
 type Store struct {
@@ -34,7 +33,7 @@ func (s *Store) CreateJob(ctx context.Context, key, jobID string, payload json.R
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.byKey[key]; exists {
-		return ErrAlreadyExists
+		return store.ErrAlreadyExists
 	}
 	s.byKey[key] = jobID
 	s.payloads[jobID] = payload

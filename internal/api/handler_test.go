@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	storeerr "mq-redis/internal/store"
 )
 
 type fakeStore struct {
@@ -18,6 +20,8 @@ type fakeStore struct {
 	getJobID      string
 	getFound      bool
 	getErr        error
+	getCalls      int
+	getResults    []getResult
 	createCalled  bool
 	createKey     string
 	createJobID   string
@@ -25,8 +29,22 @@ type fakeStore struct {
 	createErr     error
 }
 
+type getResult struct {
+	jobID string
+	found bool
+	err   error
+}
+
 func (s *fakeStore) GetJobIDByIdempotencyKey(ctx context.Context, key string) (string, bool, error) {
 	s.getKey = key
+	if len(s.getResults) > 0 {
+		idx := s.getCalls
+		s.getCalls++
+		if idx < len(s.getResults) {
+			res := s.getResults[idx]
+			return res.jobID, res.found, res.err
+		}
+	}
 	return s.getJobID, s.getFound, s.getErr
 }
 
@@ -160,7 +178,7 @@ func TestPostJobs_InvalidJSON(t *testing.T) {
 
 func TestPostJobs_FailOpen(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	store := &fakeStore{getErr: ErrStoreUnavailable}
+	store := &fakeStore{getErr: storeerr.ErrStoreUnavailable}
 	producer := &fakeProducer{}
 	r := NewRouter(store, producer)
 
@@ -182,6 +200,33 @@ func TestPostJobs_FailOpen(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), WarningDedupeDegraded) {
 		t.Fatalf("expected warning in response")
+	}
+}
+
+func TestPostJobs_DuplicateCreateRace(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &fakeStore{
+		getResults: []getResult{
+			{jobID: "", found: false, err: nil},
+			{jobID: "job-123", found: true, err: nil},
+		},
+		createErr: storeerr.ErrAlreadyExists,
+	}
+	producer := &fakeProducer{}
+	r := NewRouter(store, producer)
+
+	body := []byte(`{"idempotency_key":"k1","payload":{"a":1}}`)
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusCreated)
+	}
+	if !strings.Contains(w.Body.String(), "job-123") {
+		t.Fatalf("expected response to contain original job id")
 	}
 }
 

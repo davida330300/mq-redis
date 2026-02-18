@@ -3,8 +3,9 @@ package rediskeys
 import "time"
 
 const (
-	JobKeyPrefix     = "job:"
-	JobDataKeyPrefix = "job:data:"
+	JobKeyPrefix         = "job:"
+	JobDataKeyPrefix     = "job:data:"
+	IdempotencyKeyPrefix = "idem:"
 
 	RetryJobsKey = "retry:jobs"
 	RetryLockKey = "retry:lock"
@@ -23,4 +24,8 @@ func JobKey(id string) string {
 
 func JobDataKey(id string) string {
 	return JobDataKeyPrefix + id
+}
+
+func IdempotencyKey(key string) string {
+	return IdempotencyKeyPrefix + key
 }

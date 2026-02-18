@@ -3,7 +3,10 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+
+	storeerr "mq-redis/internal/store"
 )
 
 func TestStore_CreateAndGet(t *testing.T) {
@@ -33,8 +36,8 @@ func TestStore_CreateDuplicate(t *testing.T) {
 	if err := store.CreateJob(context.Background(), "key1", "job1", payload); err != nil {
 		t.Fatalf("CreateJob error: %v", err)
 	}
-	if err := store.CreateJob(context.Background(), "key1", "job2", payload); err == nil {
-		t.Fatalf("expected duplicate create to fail")
+	if err := store.CreateJob(context.Background(), "key1", "job2", payload); !errors.Is(err, storeerr.ErrAlreadyExists) {
+		t.Fatalf("expected ErrAlreadyExists, got %v", err)
 	}
 }
 
