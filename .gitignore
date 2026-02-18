@@ -1,0 +1,10 @@
+# AI tooling artifacts
+AGENTS.md
+.codex/
+.openai/
+.cursor/
+.aider/
+.cline/
+.windsurf/
+*.prompt
+*.llm.log
