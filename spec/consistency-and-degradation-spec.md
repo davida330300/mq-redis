@@ -4,14 +4,14 @@
 - API must write idempotency status before publishing to Kafka.
 - API order: `SETNX job:<id>=queued` -> `SET job:data:<id>` -> publish Kafka `jobs`.
 - If Kafka publish fails, API returns error and the client retries with the same idempotency key.
-- Worker must only commit Kafka offsets after Redis state is updated.
-- Worker order on success: set `processing` -> execute handler -> set `done` -> commit offset.
-- Worker order on failure: set `retrying` -> schedule retry -> commit offset.
-- DLQ order: publish to `jobs.dlq` and set status `dlq`; commit only after both succeed.
+- Worker uses Kafka auto-commit; Redis updates are best-effort and must be idempotent.
+- Worker order on success: set `processing` -> execute handler -> set `done` (offset may commit independently).
+- Worker order on failure: set `retrying` -> schedule retry (offset may commit independently).
+- DLQ order: publish to `jobs.dlq` and set status `dlq`; offsets may commit independently.
 
 ## Degradation Policy
 - Redis unavailable at API: fail-open and publish to Kafka; return 202 with a warning flag to indicate dedupe may be degraded.
-- Redis unavailable at Worker: pause processing or retry Redis write; do not commit until Redis is updated.
+- Redis unavailable at Worker: log and retry Redis write when possible; auto-commit may still advance offsets, so reconciliation is required.
 - Kafka unavailable: API returns 503; workers back off and retry consume or publish.
 
 ## Locking And Claiming

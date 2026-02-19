@@ -13,6 +13,7 @@ import (
 	"mq-redis/internal/config"
 	"mq-redis/internal/kafka"
 	"mq-redis/internal/postgres"
+	"mq-redis/internal/worker"
 )
 
 const connectTimeout = 2 * time.Second
@@ -63,11 +64,54 @@ func main() {
 		cancel()
 	}
 
+	consumer, err := kafka.NewKafkaGoConsumer(cfg.Kafka, cfg.Worker.GroupID)
+	if err != nil {
+		log.Fatalf("kafka consumer init failed: %v", err)
+	}
+	defer func() {
+		if err := consumer.Close(); err != nil {
+			log.Printf("kafka consumer close error: %v", err)
+		}
+	}()
+
+	dlqProducer, err := kafka.NewKafkaGoProducer(cfg.Kafka)
+	if err != nil {
+		log.Printf("kafka dlq producer init failed: %v", err)
+	}
+	if dlqProducer != nil {
+		defer func() {
+			if err := dlqProducer.Close(); err != nil {
+				log.Printf("kafka dlq producer close error: %v", err)
+			}
+		}()
+	}
+
+	runner, err := worker.New(consumer, redisClient, &worker.NoopProcessor{}, dlqProducer, cfg.Kafka.DLQTopic)
+	if err != nil {
+		log.Fatalf("worker init failed: %v", err)
+	}
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runner.Run(runCtx)
+	}()
+
 	log.Printf("worker starting group=%s concurrency=%d", cfg.Worker.GroupID, cfg.Worker.Concurrency)
 	log.Printf("worker using redis=%s kafka_brokers=%v", cfg.Redis.Addr, cfg.Kafka.Brokers)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+
+	cancelRun()
+	select {
+	case err := <-errCh:
+		if err != nil && err != context.Canceled {
+			log.Printf("worker stopped with error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		log.Printf("worker shutdown timed out")
+	}
 	log.Printf("worker shutting down")
 }

@@ -2,7 +2,7 @@
 
 ## Goals
 - High-throughput ingestion with Kafka as the primary queue.
-- At-least-once processing with explicit offset commits after successful handling.
+- At-least-once processing with Kafka auto-commit; Redis updates must be idempotent and reconciliation handles drift.
 - Idempotency and job status visibility via Redis.
 - Retry with exponential backoff and DLQ for poison messages.
 - Optional Saga orchestration with compensating actions for multi-step workflows.
@@ -35,6 +35,7 @@ flowchart LR
 ## Data Model (Redis)
 - `job:<id>`: status string (TTL)
 - `job:data:<id>`: JSON snapshot (TTL)
+- `job:attempt:<id>`: attempt counter (TTL)
 - `retry:jobs` (ZSET): score = next retry time (ms), member = job id
 - `retry:lock`: simple dispatcher lock
 
@@ -52,7 +53,7 @@ States (status key):
 3. API stores `job:data:<id>` and publishes to Kafka.
 4. Worker `FetchMessage` from Kafka.
 5. Worker sets `processing`, executes task.
-6. Worker sets `done` and commits offset.
+6. Worker sets `done` (offset may auto-commit independently).
 
 ## Flow: Failure + Retry
 1. Worker fails a job.
@@ -78,7 +79,7 @@ States (status key):
 4. If retries are exhausted, the worker runs compensations in reverse order and sends the job to DLQ.
 
 ## At-Least-Once Semantics
-- **Manual commit** ensures we only commit Kafka offsets after processing.
+- **Auto-commit** means offsets may advance independently of processing.
 - Possible duplicates are handled by idempotency + status checks.
 
 ## Idempotency Strategy
@@ -93,7 +94,7 @@ States (status key):
 ## Failure Modes And Multi-Node Behavior
 - Duplicates are expected under failures; idempotency is required end-to-end.
 - API fails open if Redis is unavailable; dedupe may be degraded.
-- Worker commits offsets only after Redis state updates succeed.
+- Worker uses auto-commit; Redis state updates are best-effort and reconciliation repairs drift.
 - Retry dispatcher uses short-lived locks and atomic claims to reduce duplicate requeue.
 - Reconciliation sweeper is recommended for stale `queued` and `processing` jobs.
 - Details: `design/failure-modes-discussion.md` and `spec/consistency-and-degradation-spec.md`.
@@ -133,20 +134,24 @@ States (status key):
 10. Rolling restarts on K8s do not cause message loss; in-flight jobs complete or retry safely.
 
 ## Bottom-Up Implementation Plan
-1. Redis key/TTL helpers.
-2. Job state machine model.
-3. Idempotency logic (pure functions).
-4. Payload rules (1–256KB vs pointer).
-5. Redis store interface (in-memory mock + contract).
-6. Retry scheduler logic (backoff and ZSET decisions).
-7. DLQ decision logic.
-8. Kafka abstraction (interfaces + mocks).
-9. Worker core (status updates + retry/DLQ decisions).
-10. Retry dispatcher loop (claim + republish).
-11. API enqueue flow (SETNX -> job:data -> publish).
-12. Saga/distributed transaction (steps + compensation).
-13. Multi-node behavior (locks + contention).
-14. Observability hooks (metrics/log/tracing interfaces).
+1. Redis key/TTL helpers. [done]
+2. Job state machine model. [done]
+3. Minimal API core (Gin handler, validation, enqueue flow). [done]
+4. Runnable API server (cmd/api + healthz). [done]
+5. Store interface + in-memory implementation. [done]
+6. Redis store implementation (WATCH/MULTI + TTLs). [done]
+7. Idempotency logic (pure functions). [done]
+8. Payload rules (1-256KB vs pointer). [done]
+9. Framework skeleton (config + service shells). [done]
+10. Real connect checks (Kafka/Redis/Postgres). [done]
+11. E2E smoke test (Docker Compose). [done]
+12. Worker core (status updates + retry/DLQ decisions). [next]
+13. Retry scheduler logic (backoff and ZSET decisions). [pending]
+14. DLQ decision logic. [pending]
+15. Retry dispatcher loop (claim + republish). [pending]
+16. Saga/distributed transaction (steps + compensation). [pending]
+17. Multi-node behavior (locks + contention). [pending]
+18. Observability hooks (metrics/log/tracing interfaces). [pending]
 
 ## Extension Points
 - Metrics: processing latency, queue lag, retry count, DLQ count.

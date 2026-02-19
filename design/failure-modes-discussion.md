@@ -1,8 +1,8 @@
 # Failure Modes And Multi-Node Behavior
 
 ## Worker Crash Or Restart
-- Failure: consumer process dies after fetch but before commit.
-- Expected: Kafka redelivers; worker checks Redis status and skips if already `done`.
+- Failure: consumer process dies after fetch; offsets may auto-commit.
+- Expected: duplicates are tolerated via Redis status checks; reconciliation should detect stuck or missing states.
 - Notes: processing must be idempotent; status writes are authoritative for dedupe.
 
 ## Redis Unavailable
@@ -22,7 +22,7 @@
 
 ## Network Partition
 - Failure: components have partial connectivity (Kafka ok, Redis down or vice versa).
-- Expected: fail closed for writes that require Redis; workers pause or retry on Redis errors.
+- Expected: workers log and retry Redis writes when possible; offsets may advance due to auto-commit.
 - Notes: reconciliation job should repair drift (stale `processing`, missing `queued` republishes).
 
 ## DLQ Under Partition

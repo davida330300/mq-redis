@@ -29,12 +29,23 @@ func TestIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestAttemptKey(t *testing.T) {
+	got := AttemptKey("job1")
+	want := "job:attempt:job1"
+	if got != want {
+		t.Fatalf("AttemptKey() = %q, want %q", got, want)
+	}
+}
+
 func TestConstants(t *testing.T) {
 	if JobKeyPrefix != "job:" {
 		t.Fatalf("JobKeyPrefix = %q, want %q", JobKeyPrefix, "job:")
 	}
 	if JobDataKeyPrefix != "job:data:" {
 		t.Fatalf("JobDataKeyPrefix = %q, want %q", JobDataKeyPrefix, "job:data:")
+	}
+	if AttemptKeyPrefix != "job:attempt:" {
+		t.Fatalf("AttemptKeyPrefix = %q, want %q", AttemptKeyPrefix, "job:attempt:")
 	}
 	if IdempotencyKeyPrefix != "idem:" {
 		t.Fatalf("IdempotencyKeyPrefix = %q, want %q", IdempotencyKeyPrefix, "idem:")

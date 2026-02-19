@@ -5,6 +5,7 @@ import "time"
 const (
 	JobKeyPrefix         = "job:"
 	JobDataKeyPrefix     = "job:data:"
+	AttemptKeyPrefix     = "job:attempt:"
 	IdempotencyKeyPrefix = "idem:"
 
 	RetryJobsKey = "retry:jobs"
@@ -24,6 +25,10 @@ func JobKey(id string) string {
 
 func JobDataKey(id string) string {
 	return JobDataKeyPrefix + id
+}
+
+func AttemptKey(id string) string {
+	return AttemptKeyPrefix + id
 }
 
 func IdempotencyKey(key string) string {
