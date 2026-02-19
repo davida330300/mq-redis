@@ -1,0 +1,27 @@
+api:
+  addr: "127.0.0.1:18080"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+kafka:
+  brokers:
+    - "localhost:9094"
+  jobs_topic: "jobs-e2e"
+  dlq_topic: "jobs-dlq-e2e"
+  client_id: "mq-redis-e2e"
+
+postgres:
+  dsn: "postgres://mq:mq@localhost:5432/mq?sslmode=disable"
+
+worker:
+  group_id: "mq-worker-e2e"
+  concurrency: 1
+
+retry_dispatcher:
+  poll_interval: 2s
+
+saga:
+  enabled: true
