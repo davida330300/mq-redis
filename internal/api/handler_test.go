@@ -160,6 +160,72 @@ func TestPostJobs_PayloadTooLarge(t *testing.T) {
 	}
 }
 
+func TestPostJobs_PayloadRefSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &fakeStore{}
+	producer := &fakeProducer{}
+	r := NewRouter(store, producer)
+
+	body := []byte(`{"idempotency_key":"k1","payload_ref":"s3://bucket/key","payload_size":123,"payload_hash":"abc"}`)
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusCreated)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal(store.createPayload, &stored); err != nil {
+		t.Fatalf("unmarshal store payload: %v", err)
+	}
+	if stored["payload_ref"] != "s3://bucket/key" {
+		t.Fatalf("payload_ref = %v, want %v", stored["payload_ref"], "s3://bucket/key")
+	}
+	if stored["payload_size"] != float64(123) {
+		t.Fatalf("payload_size = %v, want %v", stored["payload_size"], 123)
+	}
+	if stored["payload_hash"] != "abc" {
+		t.Fatalf("payload_hash = %v, want %v", stored["payload_hash"], "abc")
+	}
+	if string(store.createPayload) != string(producer.publishPayload) {
+		t.Fatalf("store payload and publish payload mismatch")
+	}
+}
+
+func TestPostJobs_PayloadConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := NewRouter(&fakeStore{}, &fakeProducer{})
+
+	body := []byte(`{"idempotency_key":"k1","payload":{"a":1},"payload_ref":"s3://bucket/key","payload_size":123,"payload_hash":"abc"}`)
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPostJobs_PayloadRefMissingMeta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := NewRouter(&fakeStore{}, &fakeProducer{})
+
+	body := []byte(`{"idempotency_key":"k1","payload_ref":"s3://bucket/key","payload_size":0,"payload_hash":""}`)
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestPostJobs_InvalidJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := NewRouter(&fakeStore{}, &fakeProducer{})

@@ -3,12 +3,14 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"mq-redis/internal/idempotency"
+	"mq-redis/internal/payload"
 	"mq-redis/internal/state"
 )
 
@@ -45,12 +47,32 @@ func (h *Handler) PostJobs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: ErrMissingIdempotency})
 		return
 	}
-	if len(req.Payload) == 0 {
+	decision, jobPayload, err := payload.Normalize(payload.Input{
+		Inline: req.Payload,
+		Ref:    req.PayloadRef,
+		Size:   req.PayloadSize,
+		Hash:   req.PayloadHash,
+	}, h.maxPayloadBytes)
+	switch decision {
+	case payload.DecisionMissing:
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: ErrMissingPayload})
 		return
+	case payload.DecisionConflict:
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: ErrPayloadConflict})
+		return
+	case payload.DecisionInlineTooLarge:
+		c.JSON(http.StatusRequestEntityTooLarge, ErrorResponse{Error: ErrPayloadRefRequired})
+		return
+	case payload.DecisionRefMetaMissing:
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: ErrPayloadRefInvalid})
+		return
+	case payload.DecisionError:
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrPayloadEncoding})
+		return
+	case payload.DecisionInline, payload.DecisionRef:
 	}
-	if len(req.Payload) > h.maxPayloadBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, ErrorResponse{Error: ErrPayloadTooLarge})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrPayloadEncoding})
 		return
 	}
 
@@ -58,7 +80,7 @@ func (h *Handler) PostJobs(c *gin.Context) {
 	jobID, found, err := h.store.GetJobIDByIdempotencyKey(ctx, req.IdempotencyKey)
 	switch idempotency.DecideLookup(found, err) {
 	case idempotency.LookupFailOpen:
-		h.failOpen(c, req)
+		h.failOpen(c, jobPayload)
 		return
 	case idempotency.LookupError:
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
@@ -74,7 +96,7 @@ func (h *Handler) PostJobs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrIDGeneration})
 		return
 	}
-	if err := h.store.CreateJob(ctx, req.IdempotencyKey, jobID, req.Payload); err != nil {
+	if err := h.store.CreateJob(ctx, req.IdempotencyKey, jobID, jobPayload); err != nil {
 		switch idempotency.DecideCreate(err) {
 		case idempotency.CreateAlreadyExists:
 			jobID, found, err := h.store.GetJobIDByIdempotencyKey(ctx, req.IdempotencyKey)
@@ -85,7 +107,7 @@ func (h *Handler) PostJobs(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
 			return
 		case idempotency.CreateFailOpen:
-			h.failOpenWithJobID(c, req, jobID)
+			h.failOpenWithJobID(c, jobPayload, jobID)
 			return
 		case idempotency.CreateError:
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
@@ -93,7 +115,7 @@ func (h *Handler) PostJobs(c *gin.Context) {
 		case idempotency.CreateOK:
 		}
 	}
-	if err := h.producer.Publish(ctx, jobID, req.Payload); err != nil {
+	if err := h.producer.Publish(ctx, jobID, jobPayload); err != nil {
 		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: ErrPublish})
 		return
 	}
@@ -101,17 +123,17 @@ func (h *Handler) PostJobs(c *gin.Context) {
 	c.JSON(http.StatusCreated, JobResponse{JobID: jobID, Status: string(state.Queued)})
 }
 
-func (h *Handler) failOpen(c *gin.Context, req JobRequest) {
+func (h *Handler) failOpen(c *gin.Context, payload json.RawMessage) {
 	jobID, err := newJobID()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrIDGeneration})
 		return
 	}
-	h.failOpenWithJobID(c, req, jobID)
+	h.failOpenWithJobID(c, payload, jobID)
 }
 
-func (h *Handler) failOpenWithJobID(c *gin.Context, req JobRequest, jobID string) {
-	if err := h.producer.Publish(c.Request.Context(), jobID, req.Payload); err != nil {
+func (h *Handler) failOpenWithJobID(c *gin.Context, payload json.RawMessage, jobID string) {
+	if err := h.producer.Publish(c.Request.Context(), jobID, payload); err != nil {
 		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: ErrPublish})
 		return
 	}
