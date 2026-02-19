@@ -18,7 +18,11 @@ func New(cfg kafka.Config, producer kafka.Producer) (*Producer, error) {
 		return nil, err
 	}
 	if producer == nil {
-		producer = &kafka.NoopProducer{}
+		real, err := kafka.NewKafkaGoProducer(cfg)
+		if err != nil {
+			return nil, err
+		}
+		producer = real
 	}
 	return &Producer{topic: cfg.JobsTopic, producer: producer}, nil
 }
@@ -29,4 +33,14 @@ func (p *Producer) Publish(ctx context.Context, jobID string, payload json.RawMe
 	}
 	msg := kafka.Message{Key: jobID, Value: payload}
 	return p.producer.Publish(ctx, p.topic, msg)
+}
+
+func (p *Producer) Close() error {
+	if p == nil || p.producer == nil {
+		return nil
+	}
+	if closer, ok := p.producer.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
 }

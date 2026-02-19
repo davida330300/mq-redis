@@ -21,6 +21,10 @@ func New(opts *redis.Options) *Store {
 	return &Store{client: redis.NewClient(opts)}
 }
 
+func NewWithClient(client *redis.Client) *Store {
+	return &Store{client: client}
+}
+
 func (s *Store) Close() error {
 	return s.client.Close()
 }
