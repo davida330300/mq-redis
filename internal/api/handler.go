@@ -3,14 +3,13 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"mq-redis/internal/idempotency"
 	"mq-redis/internal/state"
-	"mq-redis/internal/store"
 )
 
 type Handler struct {
@@ -57,17 +56,17 @@ func (h *Handler) PostJobs(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	jobID, found, err := h.store.GetJobIDByIdempotencyKey(ctx, req.IdempotencyKey)
-	if err != nil {
-		if errors.Is(err, store.ErrStoreUnavailable) {
-			h.failOpen(c, req)
-			return
-		}
+	switch idempotency.DecideLookup(found, err) {
+	case idempotency.LookupFailOpen:
+		h.failOpen(c, req)
+		return
+	case idempotency.LookupError:
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
 		return
-	}
-	if found {
+	case idempotency.LookupExisting:
 		c.JSON(http.StatusCreated, JobResponse{JobID: jobID, Status: string(state.Queued)})
 		return
+	case idempotency.LookupProceed:
 	}
 
 	jobID, err = newJobID()
@@ -76,17 +75,23 @@ func (h *Handler) PostJobs(c *gin.Context) {
 		return
 	}
 	if err := h.store.CreateJob(ctx, req.IdempotencyKey, jobID, req.Payload); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
+		switch idempotency.DecideCreate(err) {
+		case idempotency.CreateAlreadyExists:
 			jobID, found, err := h.store.GetJobIDByIdempotencyKey(ctx, req.IdempotencyKey)
-			if err == nil && found {
+			if idempotency.DecideDuplicate(found, err) == idempotency.DuplicateReturnExisting {
 				c.JSON(http.StatusCreated, JobResponse{JobID: jobID, Status: string(state.Queued)})
 				return
 			}
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
 			return
+		case idempotency.CreateFailOpen:
+			h.failOpenWithJobID(c, req, jobID)
+			return
+		case idempotency.CreateError:
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
+			return
+		case idempotency.CreateOK:
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrStore})
-		return
 	}
 	if err := h.producer.Publish(ctx, jobID, req.Payload); err != nil {
 		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: ErrPublish})
@@ -102,6 +107,10 @@ func (h *Handler) failOpen(c *gin.Context, req JobRequest) {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrIDGeneration})
 		return
 	}
+	h.failOpenWithJobID(c, req, jobID)
+}
+
+func (h *Handler) failOpenWithJobID(c *gin.Context, req JobRequest, jobID string) {
 	if err := h.producer.Publish(c.Request.Context(), jobID, req.Payload); err != nil {
 		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: ErrPublish})
 		return

@@ -203,6 +203,36 @@ func TestPostJobs_FailOpen(t *testing.T) {
 	}
 }
 
+func TestPostJobs_CreateFailOpen(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &fakeStore{createErr: storeerr.ErrStoreUnavailable}
+	producer := &fakeProducer{}
+	r := NewRouter(store, producer)
+
+	body := []byte(`{"idempotency_key":"k1","payload":{"a":1}}`)
+	req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+	}
+	if producer.publishCalled != true {
+		t.Fatalf("expected Publish to be called")
+	}
+	if store.createJobID == "" {
+		t.Fatalf("expected job id to be generated")
+	}
+	if producer.publishJobID != store.createJobID {
+		t.Fatalf("expected publish to use the generated job id")
+	}
+	if !strings.Contains(w.Body.String(), WarningDedupeDegraded) {
+		t.Fatalf("expected warning in response")
+	}
+}
+
 func TestPostJobs_DuplicateCreateRace(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := &fakeStore{
