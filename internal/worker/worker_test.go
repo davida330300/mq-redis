@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"mq-redis/internal/kafka"
 	"mq-redis/internal/rediskeys"
+	"mq-redis/internal/retry"
 )
 
 type fakeProcessor struct {
@@ -65,7 +67,8 @@ func TestHandleRetryThenDLQ(t *testing.T) {
 		t.Fatalf("new worker: %v", err)
 	}
 	worker.now = func() time.Time { return time.Unix(0, 0) }
-	worker.retryDelay = 2 * time.Second
+	worker.retryCfg = retry.Config{Base: 2 * time.Second, Max: 2 * time.Second, Jitter: 0}
+	worker.rng = rand.New(rand.NewSource(1))
 
 	msg := kafka.Message{Key: "job1", Value: []byte(`{"a":1}`)}
 	_ = worker.Handle(context.Background(), msg)

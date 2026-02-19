@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math/rand"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
 	"mq-redis/internal/kafka"
 	"mq-redis/internal/rediskeys"
+	"mq-redis/internal/retry"
 	"mq-redis/internal/state"
 )
 
@@ -27,11 +29,12 @@ func (p *NoopProcessor) Process(ctx context.Context, jobID string, payload json.
 type Worker struct {
 	consumer    kafka.Consumer
 	dlqProducer kafka.Producer
-	retryDelay  time.Duration
+	retryCfg    retry.Config
 	now         func() time.Time
 	dlqTopic    string
 	redis       *redis.Client
 	processor   Processor
+	rng         *rand.Rand
 }
 
 func New(consumer kafka.Consumer, redisClient *redis.Client, processor Processor, dlqProducer kafka.Producer, dlqTopic string) (*Worker, error) {
@@ -48,10 +51,11 @@ func New(consumer kafka.Consumer, redisClient *redis.Client, processor Processor
 		consumer:    consumer,
 		dlqProducer: dlqProducer,
 		dlqTopic:    dlqTopic,
-		retryDelay:  1 * time.Second,
+		retryCfg:    retry.DefaultConfig(),
 		now:         time.Now,
 		redis:       redisClient,
 		processor:   processor,
+		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}, nil
 }
 
@@ -87,11 +91,12 @@ func (w *Worker) Handle(ctx context.Context, msg kafka.Message) error {
 	attempt, err := w.bumpAttempt(ctx, jobID)
 	if err != nil {
 		log.Printf("attempt increment failed: %v", err)
+		attempt = 1
 	}
 
 	if attempt <= 1 {
 		w.setStatus(ctx, jobID, state.Retrying, rediskeys.JobStatusTTL)
-		w.scheduleRetry(ctx, jobID)
+		w.scheduleRetry(ctx, jobID, attempt)
 		return errors.New("job failed; scheduled retry")
 	}
 
@@ -124,8 +129,13 @@ func (w *Worker) setStatus(ctx context.Context, jobID string, status state.State
 	}
 }
 
-func (w *Worker) scheduleRetry(ctx context.Context, jobID string) {
-	score := float64(w.now().Add(w.retryDelay).UnixMilli())
+func (w *Worker) scheduleRetry(ctx context.Context, jobID string, attempt int64) {
+	delay, err := retry.NextDelay(w.retryCfg, attempt, w.rng)
+	if err != nil {
+		log.Printf("retry delay failed: %v", err)
+		return
+	}
+	score := retry.NextScore(w.now(), delay)
 	if err := w.redis.ZAdd(ctx, rediskeys.RetryJobsKey, redis.Z{Score: score, Member: jobID}).Err(); err != nil {
 		log.Printf("retry schedule failed: %v", err)
 	}
