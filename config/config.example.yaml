@@ -1,0 +1,27 @@
+api:
+  addr: ":8080"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+kafka:
+  brokers:
+    - "localhost:9092"
+  jobs_topic: "jobs"
+  dlq_topic: "jobs.dlq"
+  client_id: "mq-redis"
+
+postgres:
+  dsn: "postgres://user:pass@localhost:5432/mq?sslmode=disable"
+
+worker:
+  group_id: "mq-worker"
+  concurrency: 4
+
+retry_dispatcher:
+  poll_interval: 2s
+
+saga:
+  enabled: true
